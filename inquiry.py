@@ -30,24 +30,24 @@ typedef struct sg_io_hdr
 INQ_REPLY_LEN = 96
 INQ_CMD_CODE = 0x12
 INQ_CMD_LEN = 6
-SG_DXFER_NONE=-1,
-SG_DXFER_TO_DEV=-2,
-SG_DXFER_FROM_DEV=-3,
+SG_DXFER_NONE=-1
+SG_DXFER_TO_DEV=-2
+SG_DXFER_FROM_DEV=-3
 SG_DXFER_TO_FROM_DEV=-4
 
 import pdb
 
 class SgIoHdr(Structure):
      _fields_ = [("interface_id",c_int),
-                 ("dxfer_direction",c_int),
-		 ("cmd_len",c_ubyte),
-		("mx_sb_len",c_ubyte),
+            ("dxfer_direction",c_int),
+	    ("cmd_len",c_ubyte),
+           ("mx_sb_len",c_ubyte),
 		("iovec_count", c_ushort),
 		("dxfer_len", c_uint),
+                ("dxferp",c_void_p),
 		("cmdp",c_void_p),
-		("dxferp",c_void_p),
 		("sbp",c_void_p),
-		("timeout",c_uint ),
+		("timeout",c_uint),
 		("flags", c_uint),
 		("pack_id", c_int),
 		("usr_ptr", c_void_p),
@@ -62,46 +62,119 @@ class SgIoHdr(Structure):
 		("info",c_uint)]
 
 
+inqCmdBlk = (c_ubyte *INQ_CMD_LEN)(INQ_CMD_CODE, 0, 0, 0, INQ_REPLY_LEN, 0)
 
-inqCmdBlk = c_buffer(INQ_CMD_LEN)
+inqBuff = (c_ubyte * INQ_REPLY_LEN)()
 
-inqBuff = c_buffer(INQ_REPLY_LEN)
+sense_buffer = (c_ubyte * 32)()
 
-sense_buffer = c_buffer(32)
 
 io_hdr=SgIoHdr(interface_id=ord('S'),
-	       cmd_len = sizeof(inqCmdBlk),
+               dxfer_direction = SG_DXFER_FROM_DEV,
+               cmd_len = sizeof(inqCmdBlk),
 	       iovec_count = 0,
     	       mx_sb_len = sizeof(sense_buffer),
-    	       dxfer_direction = SG_DXFER_FROM_DEV,
     	       dxfer_len = INQ_REPLY_LEN,
-    	       cmdp = cast(inqCmdBlk, c_void_p),
-   	       dxferp = cast(inqBuff, c_void_p),
+               cmdp = cast(inqCmdBlk, c_void_p),
+	       dxferp = cast(inqBuff, c_void_p),
 	       sbp = cast(sense_buffer, c_void_p),
-    	       timeout = 20000,  
-    	       flags = 0,
-    	       pack_id = 0,
-    	       usr_ptr = None,
-	       status=0, 
-               masked_status=0,
-               msg_status=0, 
-               sb_len_wr=0, 
-               host_status=0, 
-               driver_status=0,
-               resid=0, 
-               duration=0, 
-               info=0)
+    	       timeout = 20000)  
 
-
-'''
 libinquiry = cdll.LoadLibrary('./libinquiry.so.1.0')
 
 sg_inquiry=libinquiry.sg_inquiry
-sg_inquiry.argtypes = (DefaultCStruct,POINTER(c_char))
+sg_inquiry.argtypes = (POINTER(SgIoHdr),)
 sg_inquiry.restype = c_int
 
-sg_inquiry(SgIoHdr,diskname)
-'''
+ret=sg_inquiry(byref(io_hdr))
+
+print "-----------------------------"
+print "python output"
+print "Some of the INQUIRY command's response: "
+
+t=cast(io_hdr.dxferp,POINTER(c_char))
+
+l=["PQual","Device_type","RMB","version","NormACA","HiSUP","Resp_data_format","SCCS","ACC","TPGS","3PC", "Protect","[BQue]","EncServ","MultiP","[MChngr]","[ACKREQQ]","Addr16","[RelAdr]","WBus16","Sync",  "Linked","[TranDis]","CmdQue","length","Peripheral device type","Vendor identification","Product identification","Product revision level"]
+
+
+class Response:
+	
+	def __init__(self,dataformat):
+		self.dataformat=dataformat
+
+	def ptr_addr(self,ptr,offset):
+		x=addressof(ptr.contents)+offset
+		return pointer(type(ptr.contents).from_address(x))
+	
+	def getPQual(self,ptr,offset):
+		m=self.ptr_addr(ptr,offset[1])
+		st=m.contents.value
+		r=bin(ord(st))[2:].zfill(8)
+		return r[dataformat["PQual"][1]:dataformat["PQual"][2]+1] 
+
+	def getDev_type(self,ptr,offset):
+		m=self.ptr_addr(ptr,offset[1])
+		st=m.contents.value
+		r=bin(ord(st))[2:].zfill(8)
+		return r[dataformat["Device_type"][1]:dataformat["Device_type"][2]+1] 
+
+	def getRMB(self,ptr,offset):
+		m=self.ptr_addr(ptr,offset[1])
+		st=m.contents.value
+		r=bin(ord(st))[2:].zfill(8)
+		return r[dataformat["RMB"][1]:dataformat["RMB"][2]+1] 
+
+	
+	def getVersion(self,ptr,offset):
+		m=self.ptr_addr(ptr,offset[1])
+		st=m.contents.value
+		r=hex(ord(st))
+		return r 
+
+	def getVendorId(self,ptr,offset):
+		r=""
+		for i in range(0,offset[0]):
+			m=self.ptr_addr(ptr,offset[1]+i)
+			r=r+m.contents.value
+		return r
+
+	def getProductId(self,ptr,offset):
+		r=""
+		for i in range(0,offset[0]):
+			m=self.ptr_addr(ptr,offset[1]+i)
+			r=r+m.contents.value
+		return r
+
+	def getProduct_rev(self,ptr,offset):
+		r=""
+		for i in range(0,offset[0]):
+			m=self.ptr_addr(ptr,offset[1]+i)
+			r=r+m.contents.value
+		return r
+
+
+
+dataformat={"PQual":[1,0,5,7],"Device_type":[1,0,0,4],"RMB":[1,7,7],"Version":[1,2],
+"Vendor_identification":[8,8,0,0],"Product_identification":[8,16,0,0],"Product_revision_level":[4,32,0,0]}
+
+res=Response(dataformat)
+
+print res.getPQual(t,dataformat["PQual"])
+print res.getDev_type(t,dataformat["Device_type"])
+print res.getRMB(t,dataformat["RMB"])
+print res.getVersion(t,dataformat["Version"])
+print res.getVendorId(t,dataformat["Vendor_identification"])
+print res.getProductId(t,dataformat["Product_identification"])
+print res.getProduct_rev(t,dataformat["Product_revision_level"])
+
+
+
+
+
+'''print "INQUIRY Duration=",io_hdr.duration,"millisecs"
+print "resid=",io_hdr.resid'''
+
+
 
 
 
